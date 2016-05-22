@@ -1,0 +1,198 @@
+package parser;
+import java.util.*;
+import java.io.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import java_cup.runtime.Symbol;
+import java_cup.runtime.ComplexSymbolFactory.ComplexSymbol;
+import java_cup.runtime.ComplexSymbolFactory;
+import minic.*;
+import scanner.*;
+
+
+parser code {: 
+  public boolean syntaxErrors;
+  public static int errors = 0;
+
+  Yylex lexer;
+ 
+  public parser(Yylex lex, ComplexSymbolFactory sf) {
+    super(lex,sf);
+    lexer = lex;
+  }
+    
+public int getNumErrors(){
+    return errors;
+}
+
+@Override
+  public void report_error(String message, Object info) {
+    if (info instanceof String){
+	errors++; 
+        try {
+            System.err.println("  "+ errors + "==> " + info + " "+ message +
+                    "\n       Parsing resumed from 2nd token before" + lexer.next_token()+"\n");
+        } catch (IOException ex) {
+            Logger.getLogger(parser.class.getName()).log(Level.SEVERE, null, ex);
+        }
+    }
+    else {
+        errors++; 
+    	StringBuffer m = new StringBuffer("Error ");
+    	if (info instanceof java_cup.runtime.Symbol) 
+     	   m.append( "("+info.toString()+")" ); 
+           m.append( "\n At line " + lexer.getLine() );
+    	m.append(" : "+message);   
+        
+    	System.err.println(m);
+        System.err.println("Current #errors:" + errors);
+    }
+  }
+   
+  public void report_fatal_error(String message, Object info) {
+    report_error(message, info);
+    throw new RuntimeException("Fatal Syntax Error");
+  }
+
+    public static void reportErrorLine(){
+        System.err.println("Error at line: " + Yylex.getLine() );
+    }
+
+:}; 
+
+/* Terminals */
+
+terminal         PGRAFFAPERTA, PGRAFFACHIUSA, PTONDAPERTA,PTONDACHIUSA,
+                 PVIRGOLA,IF, ELSE, WHILE, ASSEGN, PIUGUALE,MENOUGUALE,
+                 PERUGUALE,DIVISOUGUALE, MODULOUGUALE,PIU, MENO,
+                 PER, DIVISO, MODULO,MINORE, MINOREUGUALE,
+                 MAGGIORE,MAGGIOREUGUALE, DIVERSO, UGUALE, AND, OR, NOT, UMENO;
+terminal Integer INTCONST;
+terminal String  IDENT;
+
+
+/* Non Terminals*/
+
+nonterminal Program        program;
+nonterminal List<Stmt>     stmtlist;
+nonterminal Stmt           stmt;
+nonterminal Simp           simp;
+nonterminal Control        control;
+nonterminal Exp            exp;
+nonterminal Block          block;
+nonterminal Integer        binop,asop, unop;
+
+/* Precedences */
+
+precedence left IDENT;
+precedence left PVIRGOLA;
+precedence left WHILE;
+precedence left IF,ELSE;
+precedence right ASSEGN, PIUGUALE,MENOUGUALE,PERUGUALE,DIVISOUGUALE, MODULOUGUALE;
+precedence left OR;
+precedence left AND;
+precedence left DIVERSO, UGUALE;
+precedence left MINORE, MINOREUGUALE,MAGGIORE,MAGGIOREUGUALE;
+precedence left PIU,MENO;
+precedence left PER,DIVISO,MODULO;
+precedence right NOT,UMENO;
+precedence left error;
+
+
+/* Grammar
+    N.B. Le produzioni con il non terminale speciale 'error' sono state inserite
+    per effettuare la gestione degli errori, ovvero permettere al 
+    parser di continuare il parsing anche in caso di errore sintattico.
+ */
+
+start with program;
+
+program   ::=  PGRAFFAPERTA stmtlist:s PGRAFFACHIUSA {: RESULT = new Program(s); :}
+               | error:e stmtlist:s PGRAFFACHIUSA {:parser.report_error("Expected '{' at the beginning of the program", e); :}
+               
+                   
+    
+            ;
+
+stmtlist  ::=   {: RESULT = new LinkedList<Stmt>(); :}
+               | stmtlist:sl stmt:s {: sl.add(s); RESULT = sl; :}
+                ;
+                
+
+stmt ::= simp:s {: RESULT = s; :}
+    | control:c {: RESULT = c; :}
+    | PVIRGOLA {: RESULT = Stmt.empty(); :}
+    | error:e exp {:parser.report_error("Expected identifier or WHILE or IF token", e);:} 
+   
+    
+    ;
+ 
+simp ::= IDENT:i asop:a exp:e PVIRGOLA {: RESULT = new Simp(i, a, e); :}
+       
+       | IDENT error:e exp PVIRGOLA {:parser.report_error("Expected assignment operator", e);:} /* lo becca */
+       | IDENT asop:a  exp error:e {:parser.report_error("Expected ';' ", e);:}
+        ;
+
+/* gli if li becca tutti */
+
+control ::= IF PTONDAPERTA exp:e PTONDACHIUSA block:b1  ELSE block:b2 {: RESULT = Control.ifthenelse(b1,b2,e);  :}
+	     |IF PTONDAPERTA exp:e PTONDACHIUSA block:b {: RESULT = Control.ifthen(b, e ); :}            
+            | WHILE PTONDAPERTA exp: e PTONDACHIUSA block:b {: RESULT = Control.whileloop(b,e); :}
+            | IF error:e exp PTONDACHIUSA block  ELSE block {:parser.report_error("Missing ( in  IF condition ", e);:}
+            | IF PTONDAPERTA exp error:e block  ELSE block {:parser.report_error("Missing ')' in IF condition ", e);:}
+            | IF PTONDAPERTA exp PTONDACHIUSA block  ELSE error:e {:parser.report_error("ELSE without body", e);:}
+            | IF PTONDAPERTA exp PTONDACHIUSA error:e {:parser.report_error("Expected ';' ", e);:}
+            | IF PTONDAPERTA error:e PTONDACHIUSA {:parser.report_error("Missing condition in IF Statement ", e);:}
+            | WHILE PTONDAPERTA exp PTONDACHIUSA error:e {:parser.report_error("Expected ';' ", e);:}
+            | WHILE error:e exp PTONDACHIUSA block {:parser.report_error("Missing ( in condition ", e);:}
+            | WHILE PTONDAPERTA exp error:e {:parser.report_error("Missing ')' in condition ", e);:}
+            | WHILE PTONDAPERTA error:e PTONDACHIUSA {:parser.report_error("Missing condition in WHILE Statement ", e);:}
+        ;
+
+block ::= stmt:s {: RESULT = s; :}
+          |  PGRAFFAPERTA stmtlist:sl PGRAFFACHIUSA {: RESULT = Stmt.compound(sl) ; :} 
+          | PGRAFFAPERTA stmtlist error:e {:parser.report_error("Expected '}' at the end of the block ", e);:}
+          ;
+
+exp ::= PTONDAPERTA exp: e PTONDACHIUSA 
+    | INTCONST:c {: RESULT = Exp.intconst(c); :}
+    | IDENT: i {:RESULT = Exp.ident(i); :}
+    | unop:u exp:e {: RESULT = Exp.unop(u,e); :}
+    | error:e exp  {: parser.report_error("Syntax error, expected unary op", e); :}
+    | exp:e1 binop:op exp:e2  {: RESULT = Exp.binop(e1,op,e2); :}
+    | exp error:e exp  {: parser.report_error("Syntax error, expected binary op", e); :}
+    
+    ;
+
+asop ::= ASSEGN {: RESULT = sym.ASSEGN; :}
+        | PIUGUALE {: RESULT = sym.PIUGUALE; :}
+        | MENOUGUALE {: RESULT = sym.MENOUGUALE; :}
+        | PERUGUALE {: RESULT = sym.PERUGUALE; :}
+        | DIVISOUGUALE {: RESULT = sym.DIVISOUGUALE; :}
+        | MODULOUGUALE {: RESULT = sym.MODULOUGUALE; :} 
+       ;
+
+unop ::= NOT {: RESULT = sym.NOT; :}
+        | MENO {: RESULT = sym.MENO; :} %prec UMENO 
+        ;
+
+binop ::= PIU {: RESULT = sym.PIU; :}
+        | MENO {: RESULT = sym.MENO; :}
+        | PER {: RESULT = sym.PER; :}
+        | DIVISO {: RESULT = sym.DIVISO; :}
+        | MODULO {: RESULT = sym.MODULO; :}
+        | MINORE {: RESULT = sym.MINORE; :}
+        | MINOREUGUALE {: RESULT = sym.MINOREUGUALE; :}
+        | MAGGIORE {: RESULT = sym.MAGGIORE; :}
+        | MAGGIOREUGUALE {: RESULT = sym.MAGGIOREUGUALE; :}
+        | DIVERSO {: RESULT = sym.DIVERSO; :}
+        | UGUALE {: RESULT = sym.UGUALE; :} 
+        | AND {: RESULT = sym.AND; :}
+        | OR {: RESULT = sym.OR; :}
+        
+        ;
+
+
+
+
+
